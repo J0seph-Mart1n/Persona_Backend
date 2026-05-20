@@ -37,7 +37,7 @@ app.post('/api/process-assessment', async (req, res) => {
         A user has completed a personality assessment.
         Their baseline MBTI vector is [${mbtiVector}] [E/I, N/S, T/F, J/P].
         
-        Based on their raw answers: ${JSON.stringify(rawAnswers)}
+        Based on their detailed answers to these statements: ${JSON.stringify(rawAnswers)}
         Extract exactly 5 distinct behavioral traits for this user.
         
         Return ONLY valid JSON matching this exact schema:
@@ -54,7 +54,7 @@ app.post('/api/process-assessment', async (req, res) => {
         console.log("Calling Groq API...");
         const completion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama3-70b-8192", // High-accuracy model available on Groq
+            model: "llama-3.3-70b-versatile", // High-accuracy model available on Groq
             response_format: { type: "json_object" }, // Groq supports JSON mode!
             temperature: 0.2, // Low temperature for more deterministic output
         });
@@ -83,8 +83,10 @@ app.post('/api/process-assessment', async (req, res) => {
             WITH u
             UNWIND $traits AS trait
             MERGE (t:Trait {name: trait.name})
-            SET t.description = trait.description,
-                t.embedding = vector(trait.embedding, 384, 'FLOAT32')
+            SET t.description = trait.description
+            
+            WITH u, t, trait
+            CALL db.create.setNodeVectorProperty(t, 'embedding', trait.embedding)
             
             MERGE (u)-[r:EXHIBITS_TRAIT]->(t)
             SET r.strength = trait.strength
