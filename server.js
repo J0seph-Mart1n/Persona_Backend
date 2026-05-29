@@ -156,30 +156,44 @@ app.post('/api/chat', async (req, res) => {
     const session = driver.session();
 
     try {
-        // 1. Fetch user's traits from Neo4j
-        const result = await session.run(`
+        // 1. Fetch user's traits and domains from Neo4j
+        const traitResult = await session.run(`
             MATCH (u:User {id: $userId})-[r:EXHIBITS_TRAIT]->(t:Trait)
             RETURN t.name AS name, t.description AS description, r.strength AS strength
         `, { userId });
 
+        const domainResult = await session.run(`
+            MATCH (u:User {id: $userId})-[:ACTIVE_IN]->(d:Domain)<-[:BELONGS_TO]-(e:Entity)<-[:ASSOCIATED_WITH]-(u)
+            RETURN d.name AS domain, collect({name: e.name, description: e.description, type: e.type}) AS entities
+        `, { userId });
+
         let userContext = "No specific traits found.";
-        if (result.records.length > 0) {
-            const traits = result.records.map(record => {
+        if (traitResult.records.length > 0) {
+            const traits = traitResult.records.map(record => {
                 return `- ${record.get('name')} (Strength: ${record.get('strength')}): ${record.get('description')}`;
             });
-            userContext = traits.join('\n');
+            userContext = "Traits:\n" + traits.join('\n');
+        }
+
+        if (domainResult.records.length > 0) {
+            const domains = domainResult.records.map(record => {
+                const domainName = record.get('domain');
+                const entities = record.get('entities').map(e => `  * ${e.name} (${e.type}): ${e.description}`).join('\n');
+                return `- Domain: ${domainName}\n${entities}`;
+            });
+            userContext += "\n\nDomains & Interests:\n" + domains.join('\n');
         }
 
         // 2. Construct System Prompt
         const systemPrompt = `
             You are Persona, a highly advanced, perceptive, and personalized AI assistant.
-            You have access to the user's psychological profile and behavioral traits mapped in a vector graph.
+            You have access to the user's psychological profile, domains of interest, and specific skills mapped in a vector graph.
 
-            User's Detected Traits:
+            User's Detected Profile:
             ${userContext}
 
             Use this information to implicitly understand the user and tailor your responses. 
-            Do not explicitly say "Based on your traits...", but let your tone, advice, and analysis reflect their personality (e.g., if they are abstract thinkers, use metaphors; if they are highly structured, use clear steps).
+            Do not explicitly say "Based on your traits...", but let your tone, advice, and analysis reflect their personality and domains of expertise.
             Keep your responses concise, intelligent, and slightly cyberpunk/analytical in tone, fitting the 'Vector.OS' persona.
         `;
 
@@ -247,6 +261,7 @@ app.post('/api/ingest/social', async (req, res) => {
         Ignore UI artifacts (like "Retweets", "Followers", "Menu", "Login").
         Focus on what the user says about themselves, their work history, projects, tone, and interests.
         Extract 3 to 5 psychological or professional traits.
+        Also extract up to 3 major Domains (e.g., "Software Engineering", "Fitness", "Music") and specific Entities/Nodes within those domains (e.g., "React", "Marathon Running").
         
         Return ONLY valid JSON matching this schema:
         {
@@ -255,6 +270,19 @@ app.post('/api/ingest/social', async (req, res) => {
                     "name": "Trait Name",
                     "description": "Why they have this trait based strictly on the text.",
                     "strength": 0.85 
+                }
+            ],
+            "domains": [
+                {
+                    "name": "Domain Name",
+                    "relevance": 0.9,
+                    "entities": [
+                        {
+                            "name": "Entity Name",
+                            "description": "Context from profile",
+                            "type": "Skill"
+                        }
+                    ]
                 }
             ]
         }`;
@@ -269,7 +297,7 @@ app.post('/api/ingest/social', async (req, res) => {
         const extractedData = JSON.parse(completion.choices[0].message.content);
 
         // 3. Generate HuggingFace Embeddings
-        console.log("[VECTOR.OS] Generating embeddings for social traits...");
+        console.log("[VECTOR.OS] Generating embeddings for social traits and entities...");
         for (let trait of extractedData.traits) {
             const embeddingResponse = await hf.featureExtraction({
                 model: "BAAI/bge-small-en-v1.5",
@@ -278,9 +306,22 @@ app.post('/api/ingest/social', async (req, res) => {
             trait.embedding = embeddingResponse;
         }
 
+        const domains = extractedData.domains || [];
+        for (let domain of domains) {
+            for (let entity of domain.entities) {
+                const embeddingResponse = await hf.featureExtraction({
+                    model: "BAAI/bge-small-en-v1.5",
+                    inputs: entity.description,
+                });
+                entity.embedding = embeddingResponse;
+            }
+        }
+
         // 4. Ingest into Neo4j with Data Provenance
-        console.log("[VECTOR.OS] Mapping social traits to Vector Space...");
-        const cypherQuery = `
+        console.log("[VECTOR.OS] Mapping social traits, domains, and entities to Vector Space...");
+        
+        // Query 1: Traits
+        const cypherQueryTraits = `
             MERGE (u:User {id: $userId})
             MERGE (s:DataSource {name: $platform, url: $profileUrl})
             MERGE (u)-[:CONNECTED_TO]->(s)
@@ -299,17 +340,54 @@ app.post('/api/ingest/social', async (req, res) => {
             MERGE (t)-[:EXTRACTED_FROM]->(s)
         `;
 
-        await session.run(cypherQuery, { 
+        await session.run(cypherQueryTraits, { 
             userId, 
             platform,
             profileUrl,
             traits: extractedData.traits 
         });
 
+        // Query 2: Domains & Entities
+        if (domains.length > 0) {
+            const cypherQueryDomains = `
+                MATCH (u:User {id: $userId})
+                MATCH (s:DataSource {name: $platform, url: $profileUrl})
+                
+                WITH u, s
+                UNWIND $domains AS domain
+                MERGE (d:Domain {name: domain.name})
+                MERGE (u)-[r1:ACTIVE_IN]->(d)
+                SET r1.relevance = domain.relevance
+                
+                WITH u, s, d, domain
+                UNWIND domain.entities AS entity
+                MERGE (e:Entity {name: entity.name})
+                SET e.description = entity.description, e.type = entity.type
+                
+                WITH u, s, d, e, entity
+                CALL db.create.setNodeVectorProperty(e, 'embedding', entity.embedding)
+                
+                MERGE (u)-[r2:ASSOCIATED_WITH]->(e)
+                SET r2.type = entity.type
+                
+                MERGE (e)-[:BELONGS_TO]->(d)
+                MERGE (e)-[:EXTRACTED_FROM]->(s)
+            `;
+            
+            await session.run(cypherQueryDomains, { 
+                userId, 
+                platform,
+                profileUrl,
+                domains: domains
+            });
+        }
+
         res.status(200).json({ 
             message: "Headless social ingestion complete.",
             traitsExtracted: extractedData.traits.length,
-            traits: extractedData.traits 
+            domainsExtracted: domains.length,
+            traits: extractedData.traits,
+            domains: domains 
         });
 
     } catch (error) {
