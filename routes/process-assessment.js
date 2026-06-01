@@ -10,7 +10,7 @@ module.exports = (groq, hf, driver) => async (req, res) => {
         Their baseline MBTI vector is [${mbtiVector}] [E/I, N/S, T/F, J/P].
         
         Based on their detailed answers to these statements: ${JSON.stringify(rawAnswers)}
-        Extract exactly 5 distinct behavioral traits for this user.
+        Extract behavioral traits for this user.
         
         Return ONLY valid JSON matching this exact schema:
         {

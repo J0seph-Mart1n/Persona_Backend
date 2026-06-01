@@ -1,48 +1,50 @@
-const { extractProfileHeadless } = require('../scraper');
+const { PDFParse } = require('pdf-parse');
 
 module.exports = (groq, hf, driver) => async (req, res) => {
-    const { userId, platform, profileUrl } = req.body;
+    const { userId } = req.body;
     
-    if (!userId || !platform || !profileUrl) {
-        return res.status(400).json({ error: "Missing userId, platform, or profileUrl" });
+    if (!userId || !req.file) {
+        return res.status(400).json({ error: "Missing userId or resume file." });
     }
 
     const session = driver.session();
 
     try {
-        // 1. Headless Extraction via Playwright
-        console.log(`[VECTOR.OS] Triggering headless extraction for ${platform}...`);
-        const rawProfileText = await extractProfileHeadless(profileUrl, platform);
+        console.log(`[VECTOR.OS] Parsing uploaded resume for user: ${userId}...`);
+        
+        // 1. Extract raw text from the PDF buffer
+        const parser = new PDFParse({ data: req.file.buffer });
+        const pdfData = await parser.getText();
+        const rawResumeText = pdfData.text;
 
-        if (!rawProfileText || rawProfileText.trim() === "") {
-            return res.status(400).json({ error: "Could not extract sufficient profile data." });
+        if (!rawResumeText || rawResumeText.trim() === "") {
+            return res.status(400).json({ error: "Could not extract text from the provided PDF." });
         }
 
-        console.log(rawProfileText)
+        console.log(`[VECTOR.OS] Extracted ${rawResumeText.length} characters from resume.`);
 
         // 2. LLM Trait Extraction via Groq
-        console.log("[VECTOR.OS] Pushing scraped text to Groq LLM...");
+        console.log("[VECTOR.OS] Pushing resume text to Groq LLM...");
         const prompt = `
-        You are an expert behavioral analyst system for VECTOR.OS.
-        I have scraped text strictly from a user's ${platform} profile. 
+        You are an expert professional profiler and behavioral analyst for VECTOR.OS.
+        I have extracted the raw text from a user's resume.
         
-        Raw Profile Text: 
+        Raw Resume Text: 
         """
-        ${rawProfileText.substring(0, 6000)}
+        ${rawResumeText.substring(0, 6000)} // Truncating to avoid token limits
         """
         
-        Ignore UI artifacts (like "Retweets", "Followers", "Menu", "Login").
-        Focus on what the user says about themselves, their work history, projects, tone, and interests.
-        Extract psychological or professional traits.
-        Also extract major Domains (e.g., "Software Engineering", "Fitness", "Music") and specific Entities/Nodes within those domains (e.g., "React", "Marathon Running").
+        Analyze their career trajectory, skills, action verbs, and accomplishments.
+        Extract deep professional/psychological traits (e.g., "Strategic Leader", "Hyper-Focused Executor", "Adaptable Generalist").
+        Also extract major Domains (e.g., "Software Engineering", "Product Management") and specific Entities/Nodes within those domains (e.g., "React", "Machine Learning").
         
         Return ONLY valid JSON matching this schema:
         {
             "traits": [
                 {
                     "name": "Trait Name",
-                    "description": "Why they have this trait based strictly on the text.",
-                    "strength": 0.85 
+                    "description": "Why they possess this trait based on specific resume evidence.",
+                    "strength": 0.90 
                 }
             ],
             "domains": [
@@ -52,7 +54,7 @@ module.exports = (groq, hf, driver) => async (req, res) => {
                     "entities": [
                         {
                             "name": "Entity Name",
-                            "description": "Context from profile",
+                            "description": "Context from resume",
                             "type": "Skill"
                         }
                     ]
@@ -70,7 +72,7 @@ module.exports = (groq, hf, driver) => async (req, res) => {
         const extractedData = JSON.parse(completion.choices[0].message.content);
 
         // 3. Generate HuggingFace Embeddings
-        console.log("[VECTOR.OS] Generating embeddings for social traits and entities...");
+        console.log("[VECTOR.OS] Generating embeddings for professional traits and entities...");
         for (let trait of extractedData.traits) {
             const embeddingResponse = await hf.featureExtraction({
                 model: "BAAI/bge-small-en-v1.5",
@@ -90,13 +92,14 @@ module.exports = (groq, hf, driver) => async (req, res) => {
             }
         }
 
-        // 4. Ingest into Neo4j with Data Provenance
-        console.log("[VECTOR.OS] Mapping social traits, domains, and entities to Vector Space...");
+        // 4. Ingest into Neo4j with Data Provenance ("Resume")
+        console.log("[VECTOR.OS] Mapping resume traits, domains, and entities to Vector Space...");
         
-        // Query 1: Traits
         const cypherQueryTraits = `
             MERGE (u:User {id: $userId})
-            MERGE (s:DataSource {name: $platform, url: $profileUrl})
+            
+            // Note: We flag this DataSource as a static 'Resume' document
+            MERGE (s:DataSource {name: 'Resume', filename: $filename})
             MERGE (u)-[:CONNECTED_TO]->(s)
             
             WITH u, s
@@ -115,16 +118,14 @@ module.exports = (groq, hf, driver) => async (req, res) => {
 
         await session.run(cypherQueryTraits, { 
             userId, 
-            platform,
-            profileUrl,
+            filename: req.file.originalname,
             traits: extractedData.traits 
         });
 
-        // Query 2: Domains & Entities
         if (domains.length > 0) {
             const cypherQueryDomains = `
                 MATCH (u:User {id: $userId})
-                MATCH (s:DataSource {name: $platform, url: $profileUrl})
+                MATCH (s:DataSource {name: 'Resume', filename: $filename})
                 
                 WITH u, s
                 UNWIND $domains AS domain
@@ -149,14 +150,13 @@ module.exports = (groq, hf, driver) => async (req, res) => {
             
             await session.run(cypherQueryDomains, { 
                 userId, 
-                platform,
-                profileUrl,
+                filename: req.file.originalname,
                 domains: domains
             });
         }
 
         res.status(200).json({ 
-            message: "Headless social ingestion complete.",
+            message: "Resume ingestion complete.",
             traitsExtracted: extractedData.traits.length,
             domainsExtracted: domains.length,
             traits: extractedData.traits,
@@ -164,9 +164,9 @@ module.exports = (groq, hf, driver) => async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Ingestion Error:", error);
-        res.status(500).json({ error: "Data pipeline failure during social extraction." });
+        console.error("Resume Ingestion Error:", error);
+        res.status(500).json({ error: "Failed to parse and ingest resume." });
     } finally {
         await session.close();
     }
-};
+}

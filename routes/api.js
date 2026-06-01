@@ -1,9 +1,13 @@
 const express = require('express');
+const multer = require('multer');
 
 const processAssessmentHandler = require('./process-assessment');
 const graphHandler = require('./graph');
 const chatHandler = require('./chat');
 const ingestSocialHandler = require('./ingest-social');
+const resumeUploadHandler = require('./resume-upload');
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 module.exports = (groq, hf, driver) => {
     const router = express.Router();
@@ -27,6 +31,11 @@ module.exports = (groq, hf, driver) => {
     // ENDPOINT 4: Headless Social Profile Extraction & Ingestion
     // =========================================================================
     router.post('/ingest/social', ingestSocialHandler(groq, hf, driver));
+
+    // =========================================================================
+    // ENDPOINT 5: Resume Upload & Extraction
+    // =========================================================================
+    router.post('/ingest/resume', upload.single('resumeFile'), resumeUploadHandler(groq, hf, driver));
 
     return router;
 };
