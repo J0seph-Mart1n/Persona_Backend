@@ -1,13 +1,13 @@
 const { PDFParse } = require('pdf-parse');
 
-module.exports = (groq, hf, driver) => async (req, res) => {
+module.exports = (ollama, driver) => async (req, res) => {
     const { userId } = req.body;
     
     if (!userId || !req.file) {
         return res.status(400).json({ error: "Missing userId or resume file." });
     }
 
-    const session = driver.session();
+    const session = driver && typeof driver.session === 'function' ? driver.session() : null;
 
     try {
         console.log(`[VECTOR.OS] Parsing uploaded resume for user: ${userId}...`);
@@ -62,33 +62,35 @@ module.exports = (groq, hf, driver) => async (req, res) => {
             ]
         }`;
 
-        const completion = await groq.chat.completions.create({
+        const completion = await ollama.chat({
+            model: process.env.LOCAL_LLM_MODEL || "llama3",
             messages: [{ role: "user", content: prompt }],
-            model: "llama-3.3-70b-versatile",
-            response_format: { type: "json_object" },
-            temperature: 0.1, 
+            format: "json",
+            options: {
+                temperature: 0.1,
+            }
         });
 
-        const extractedData = JSON.parse(completion.choices[0].message.content);
+        const extractedData = JSON.parse(completion.message.content);
 
         // 3. Generate HuggingFace Embeddings
         console.log("[VECTOR.OS] Generating embeddings for professional traits and entities...");
         for (let trait of extractedData.traits) {
-            const embeddingResponse = await hf.featureExtraction({
-                model: "BAAI/bge-small-en-v1.5",
-                inputs: trait.description,
+            const embeddingResponse = await ollama.embeddings({
+                model: process.env.LOCAL_EMBEDDING_MODEL || "nomic-embed-text",
+                prompt: trait.description,
             });
-            trait.embedding = embeddingResponse;
+            trait.embedding = embeddingResponse.embedding;
         }
 
         const domains = extractedData.domains || [];
         for (let domain of domains) {
             for (let entity of domain.entities) {
-                const embeddingResponse = await hf.featureExtraction({
-                    model: "BAAI/bge-small-en-v1.5",
-                    inputs: entity.description,
+                const embeddingResponse = await ollama.embeddings({
+                    model: process.env.LOCAL_EMBEDDING_MODEL || "nomic-embed-text",
+                    prompt: entity.description,
                 });
-                entity.embedding = embeddingResponse;
+                entity.embedding = embeddingResponse.embedding;
             }
         }
 
@@ -116,11 +118,13 @@ module.exports = (groq, hf, driver) => async (req, res) => {
             MERGE (t)-[:EXTRACTED_FROM]->(s)
         `;
 
-        await session.run(cypherQueryTraits, { 
-            userId, 
-            filename: req.file.originalname,
-            traits: extractedData.traits 
-        });
+        if (session) {
+            await session.run(cypherQueryTraits, { 
+                userId, 
+                filename: req.file.originalname,
+                traits: extractedData.traits 
+            });
+        }
 
         if (domains.length > 0) {
             const cypherQueryDomains = `
@@ -148,11 +152,13 @@ module.exports = (groq, hf, driver) => async (req, res) => {
                 MERGE (e)-[:EXTRACTED_FROM]->(s)
             `;
             
-            await session.run(cypherQueryDomains, { 
-                userId, 
-                filename: req.file.originalname,
-                domains: domains
-            });
+            if (session) {
+                await session.run(cypherQueryDomains, { 
+                    userId, 
+                    filename: req.file.originalname,
+                    domains: domains
+                });
+            }
         }
 
         res.status(200).json({ 
@@ -167,6 +173,8 @@ module.exports = (groq, hf, driver) => async (req, res) => {
         console.error("Resume Ingestion Error:", error);
         res.status(500).json({ error: "Failed to parse and ingest resume." });
     } finally {
-        await session.close();
+        if (typeof session !== 'undefined' && session) {
+            await session.close();
+        }
     }
 }

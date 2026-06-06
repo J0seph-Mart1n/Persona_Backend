@@ -1,11 +1,11 @@
-module.exports = (groq, hf, driver) => async (req, res) => {
+module.exports = (ollama, driver) => async (req, res) => {
     const { userId, message, history = [] } = req.body;
     
     if (!userId || !message) {
         return res.status(400).json({ error: "Missing userId or message" });
     }
 
-    const session = driver.session();
+    const session = driver && typeof driver.session === 'function' ? driver.session() : null;
 
     try {
         // 1. Fetch user's traits and domains from Neo4j
@@ -49,22 +49,24 @@ module.exports = (groq, hf, driver) => async (req, res) => {
             Keep your responses concise, intelligent, and slightly cyberpunk/analytical in tone, fitting the 'Vector.OS' persona.
         `;
 
-        // 3. Construct messages array for Groq
+        // 3. Construct messages array for Ollama
         const messages = [
             { role: "system", content: systemPrompt },
             ...history,
             { role: "user", content: message }
         ];
 
-        // 4. Call Groq API
-        console.log("Calling Groq for chat completion...");
-        const completion = await groq.chat.completions.create({
+        // 4. Call Ollama
+        console.log("Calling Ollama for chat completion...");
+        const completion = await ollama.chat({
+            model: process.env.LOCAL_LLM_MODEL,
             messages: messages,
-            model: "llama-3.3-70b-versatile",
-            temperature: 0.7, // Higher temperature for chat
+            options: {
+                temperature: 0.7, // Higher temperature for chat
+            }
         });
 
-        const aiResponse = completion.choices[0].message.content;
+        const aiResponse = completion.message.content;
 
         res.status(200).json({ response: aiResponse });
 
@@ -72,6 +74,8 @@ module.exports = (groq, hf, driver) => async (req, res) => {
         console.error("Error in chat endpoint:", error);
         res.status(500).json({ error: "Failed to process chat message" });
     } finally {
-        await session.close();
+        if (typeof session !== 'undefined' && session) {
+            await session.close();
+        }
     }
 };

@@ -1,6 +1,6 @@
-module.exports = (groq, hf, driver) => async (req, res) => {
+module.exports = (ollama, driver) => async (req, res) => {
     const { userId, mbtiVector, rawAnswers } = req.body;
-    const session = driver.session();
+    const session = driver && typeof driver.session === 'function' ? driver.session() : null;
 
     try {
         // 1. Get structured traits from Groq (Using LLaMA 3 70B)
@@ -23,27 +23,29 @@ module.exports = (groq, hf, driver) => async (req, res) => {
             ]
         }`;
 
-        console.log("Calling Groq API...");
-        const completion = await groq.chat.completions.create({
+        console.log("Calling Ollama for extraction...");
+        const completion = await ollama.chat({
+            model: process.env.LOCAL_LLM_MODEL, // High-accuracy model available on Groq
             messages: [{ role: "user", content: prompt }],
-            model: "llama-3.3-70b-versatile", // High-accuracy model available on Groq
-            response_format: { type: "json_object" }, // Groq supports JSON mode!
-            temperature: 0.2, // Low temperature for more deterministic output
+            format: "json", // Ollama supports JSON mode!
+            options: {
+                temperature: 0.2, // Low temperature for more deterministic output
+            }
         });
 
-        const extractedData = JSON.parse(completion.choices[0].message.content);
+        const extractedData = JSON.parse(completion.message.content);
         console.log("Groq Extraction Complete:", extractedData.traits);
 
         // 2. Generate Vector Embeddings using HuggingFace
         // Using 'bge-small-en-v1.5' - a highly rated, fast, open-source embedding model
-        console.log("Generating Embeddings via HuggingFace...");
+        console.log("Generating Embeddings via Ollama...");
         for (let trait of extractedData.traits) {
-            const embeddingResponse = await hf.featureExtraction({
-                model: "BAAI/bge-small-en-v1.5",
-                inputs: trait.description,
+            const embeddingResponse = await ollama.embeddings({
+                model: process.env.LOCAL_EMBEDDING_MODEL || "nomic-embed-text", // Local embedding model
+                prompt: trait.description,
             });
-            // HuggingFace returns a raw array of floats for feature extraction
-            trait.embedding = embeddingResponse; 
+            // Ollama returns the vector array inside the `embedding` property
+            trait.embedding = embeddingResponse.embedding; 
         }
 
         // 3. Ingest into Neo4j
@@ -64,11 +66,13 @@ module.exports = (groq, hf, driver) => async (req, res) => {
             SET r.strength = trait.strength
         `;
 
-        await session.run(cypherQuery, { 
-            userId, 
-            mbtiVector, 
-            traits: extractedData.traits 
-        });
+        if (session) {
+            await session.run(cypherQuery, { 
+                userId, 
+                mbtiVector, 
+                traits: extractedData.traits 
+            });
+        }
 
         res.status(200).json({ message: "Assessment processed via Groq and ingested to Neo4j successfully!" });
 
@@ -76,6 +80,8 @@ module.exports = (groq, hf, driver) => async (req, res) => {
         console.error("Error processing assessment:", error);
         res.status(500).json({ error: "Failed to process assessment" });
     } finally {
-        await session.close();
+        if (typeof session !== 'undefined' && session) {
+            await session.close();
+        }
     }
 };
