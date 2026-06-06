@@ -1,5 +1,7 @@
+const ChatSession = require('../models/ChatSession');
+
 module.exports = (ollama, driver) => async (req, res) => {
-    const { userId, message, history = [] } = req.body;
+    const { userId, message, history = [], sessionId } = req.body;
     
     if (!userId || !message) {
         return res.status(400).json({ error: "Missing userId or message" });
@@ -67,6 +69,20 @@ module.exports = (ollama, driver) => async (req, res) => {
         });
 
         const aiResponse = completion.message.content;
+
+        if (sessionId) {
+            const newMessagesToSave = [
+                { role: "user", content: message, timestamp: new Date() },
+                { role: "assistant", content: aiResponse, timestamp: new Date() }
+            ];
+
+            // $push with $each efficiently appends the two new messages to the array
+            await ChatSession.findOneAndUpdate(
+                { _id: sessionId, userId: userId },
+                { $push: { messages: { $each: newMessagesToSave } } },
+                { new: true }
+            );
+        }
 
         res.status(200).json({ response: aiResponse });
 

@@ -3,10 +3,17 @@ const express = require('express');
 const cors = require('cors');
 const { Ollama } = require('ollama'); // Official Ollama SDK
 const neo4j = require('neo4j-driver');
+const mongoose  = require('mongoose');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/persona';
+
+mongoose.connect(MONGODB_URI)
+    .then(() => console.log('✅ MongoDB Connected successfully!'))
+    .catch((err) => console.error('❌ MongoDB Connection Error:', err));
 
 // Initialize Local Ollama Client (Handles BOTH Chat & Embeddings)
 const ollama = new Ollama({ 

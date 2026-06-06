@@ -5,6 +5,7 @@ const processAssessmentHandler = require('./process-assessment');
 const graphHandler = require('./graph');
 const chatHandler = require('./chat');
 const resumeUploadHandler = require('./resume-upload');
+const { createChatSession, getChatSessions, getSessionMessages } = require('./SaveChat');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -30,6 +31,13 @@ module.exports = (ollama, driver) => {
     // ENDPOINT 4: Resume Upload & Extraction
     // =========================================================================
     router.post('/ingest/resume', upload.single('resumeFile'), resumeUploadHandler(ollama, driver));
+
+    // =========================================================================
+    // ENDPOINT 5: Chat Sessions (Save & Retrieve History)
+    // =========================================================================
+    router.post('/chat/sessions', createChatSession);
+    router.get('/chat/sessions/:userId', getChatSessions);
+    router.get('/chat/sessions/:userId/:sessionId', getSessionMessages);
 
     return router;
 };
