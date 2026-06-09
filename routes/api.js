@@ -6,6 +6,7 @@ const graphHandler = require('./graph');
 const chatHandler = require('./chat');
 const resumeUploadHandler = require('./resume-upload');
 const { createChatSession, getChatSessions, getSessionMessages } = require('./SaveChat');
+const { saveAssessmentHandler, getAssessmentHandler } = require('./SaveAssessment');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -38,6 +39,12 @@ module.exports = (ollama, driver) => {
     router.post('/chat/sessions', createChatSession);
     router.get('/chat/sessions/:userId', getChatSessions);
     router.get('/chat/sessions/:userId/:sessionId', getSessionMessages);
+
+    // =========================================================================
+    // ENDPOINT 6: Save/Update Assessment (Upsert)
+    // =========================================================================
+    router.post('/api/assessment', saveAssessmentHandler)
+    router.get('/api/assessment/:userId', getAssessmentHandler)
 
     return router;
 };
