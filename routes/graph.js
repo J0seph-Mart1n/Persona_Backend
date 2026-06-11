@@ -39,9 +39,7 @@ module.exports = (ollama, driver) => async (req, res) => {
                 const entityName = record.get('entityName');
                 const domainName = record.get('domainName');
                 nodesMap.set(entityName, { id: entityName, group: "Entity" });
-                links.push({ source: entityName, target: domainName, val: 1 });
-                // Also implicitly link to user
-                links.push({ source: userId, target: entityName, val: 0.5 });
+                links.push({ source: domainName, target: entityName, val: 0.8 });
             });
         }
 
