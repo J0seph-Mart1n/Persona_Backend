@@ -5,7 +5,7 @@ const processAssessmentHandler = require('./process-assessment');
 const graphHandler = require('./graph');
 const chatHandler = require('./chat');
 const resumeUploadHandler = require('./resume-upload');
-const { createChatSession, getChatSessions, getSessionMessages } = require('./SaveChat');
+const { createChatSession, getChatSessions, getSessionMessages, saveMessageToSession } = require('./SaveChat');
 const { saveAssessmentHandler, getAssessmentHandler } = require('./SaveAssessment');
 const { getProfile, updateProfile } = require('./manageUserProfile');
 
@@ -40,18 +40,19 @@ module.exports = (ollama, driver) => {
     router.post('/chat/sessions', createChatSession);
     router.get('/chat/sessions/:userId', getChatSessions);
     router.get('/chat/sessions/:userId/:sessionId', getSessionMessages);
+    router.post('/chat/sessions/:userId/:sessionId/messages', saveMessageToSession);
 
     // =========================================================================
     // ENDPOINT 6: Save/Update Assessment (Upsert)
     // =========================================================================
-    router.post('/api/assessment', saveAssessmentHandler)
-    router.get('/api/assessment/:userId', getAssessmentHandler)
+    router.post('/assessment', saveAssessmentHandler)
+    router.get('/assessment/:userId', getAssessmentHandler)
 
     // =========================================================================
     // ENDPOINT 7: Save/Update User Profile (Upsert)
     // =========================================================================
-    router.put('/api/profile', updateProfile)
-    router.get('/api/profile', getProfile)
+    router.put('/profile', updateProfile)
+    router.get('/profile', getProfile)
 
     return router;
 };

@@ -34,9 +34,8 @@ exports.getChatSessions = async (req, res) => {
     const { userId } = req.params;
 
     try {
-        // Find sessions, sort by newest first, and exclude the giant messages array to save bandwidth
+        // Find sessions, sort by newest first
         const sessions = await ChatSession.find({ userId })
-            .select('-messages') // Do not return messages here, just metadata
             .sort({ updatedAt: -1 })
             .lean();
 
@@ -67,5 +66,34 @@ exports.getSessionMessages = async (req, res) => {
     } catch (error) {
         console.error("Error fetching session messages:", error);
         res.status(500).json({ error: "Failed to fetch session messages" });
+    }
+};
+
+// =========================================================================
+// ENDPOINT: Save Message to Session
+// =========================================================================
+exports.saveMessageToSession = async (req, res) => {
+    const { userId, sessionId } = req.params;
+    const { messages = [] } = req.body;
+
+    if (!messages || messages.length === 0) {
+        return res.status(400).json({ error: "Missing messages to save" });
+    }
+
+    try {
+        const session = await ChatSession.findOneAndUpdate(
+            { _id: sessionId, userId: userId },
+            { $push: { messages: { $each: messages } } },
+            { new: true }
+        );
+
+        if (!session) {
+            return res.status(404).json({ error: "Session not found" });
+        }
+
+        res.status(200).json({ message: "Messages saved successfully" });
+    } catch (error) {
+        console.error("Error saving messages to session:", error);
+        res.status(500).json({ error: "Failed to save messages" });
     }
 };
