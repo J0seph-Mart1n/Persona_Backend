@@ -1,4 +1,5 @@
 const ChatSession = require('../models/ChatSession');
+const extractGraphFromChat = require('./../functions/extractGraphFromChat');
 
 module.exports = (ollama, driver) => async (req, res) => {
     const { userId, message, history = [], sessionId } = req.body;
@@ -84,7 +85,13 @@ module.exports = (ollama, driver) => async (req, res) => {
             );
         }
 
+        // 5. Send response to the client IMMEDIATELY
         res.status(200).json({ response: aiResponse });
+
+        // 6. Fire-and-forget: Extract graph nodes from this exchange in the background
+        extractGraphFromChat(ollama, driver, userId, message, aiResponse).catch(err => {
+            console.error("[VECTOR.OS] Background graph extraction failed (non-fatal):", err.message);
+        });
 
     } catch (error) {
         console.error("Error in chat endpoint:", error);
